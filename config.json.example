@@ -1,0 +1,15 @@
+{
+  "database": {
+    "path": "data/index.db"
+  },
+  "server": {
+    "port": 3000,
+    "baseUrl": "http://localhost:3000"
+  },
+  "playlist": {
+    "defaultCount": 20,
+    "maxCount": 50,
+    "summaryCount": 20,
+    "messageSummaryCount": 8
+  }
+}

@@ -1,0 +1,25 @@
+# Local configuration
+config.json
+config.local.json
+*.env
+.env
+
+# Database and indexes
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node modules
+node_modules/
+
+# Personal music data
+music/
+library/
