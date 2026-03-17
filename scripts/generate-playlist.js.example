@@ -464,6 +464,34 @@ function cleanMatchText(value) {
     .trim();
 }
 
+// 简繁体常见字映射（用于艺术家去重）
+const SIMPLIFIED_MAP = {
+  '傑': '杰', '倫': '伦', '華': '华', '國': '国', '東': '东', '風': '风',
+  '愛': '爱', '樂': '乐', '學': '学', '書': '书', '電': '电', '車': '车',
+  '長': '长', '門': '门', '開': '开', '關': '关', '時': '时', '間': '间',
+  '頭': '头', '見': '见', '說': '说', '話': '话', '語': '语', '讀': '读',
+  '寫': '写', '聽': '听', '聲': '声', '響': '响', '飛': '飞', '機': '机',
+  '雲': '云', '電': '电', '龍': '龙', '鳳': '凤', '馬': '马', '魚': '鱼',
+  '鳥': '鸟', '雞': '鸡', '貓': '猫', '狗': '狗', '蘭': '兰', '菊': '菊',
+  '陳': '陈', '張': '张', '劉': '刘', '黃': '黄', '楊': '杨', '趙': '赵',
+  '鄭': '郑', '謝': '谢', '許': '许', '鄧': '邓', '蕭': '萧', '葉': '叶',
+  '羅': '罗', '韓': '韩', '馮': '冯', '蔡': '蔡', '彭': '彭', '潘': '潘',
+  '蘇': '苏', '盧': '卢', '蔣': '蒋', '魏': '魏', '譚': '谭', '鍾': '钟',
+  '薛': '薛', '賴': '赖', '鄒': '邹', '範': '范', '廖': '廖', '曾': '曾',
+  '費': '费', '萬': '万', '歲': '岁', '齊': '齐', '齡': '龄', '靈': '灵'
+};
+
+function normalizeArtistName(name) {
+  let result = cleanMatchText(name);
+  // 简繁体转换
+  for (const [trad, simp] of Object.entries(SIMPLIFIED_MAP)) {
+    result = result.replace(new RegExp(trad, 'g'), simp);
+  }
+  // 提取主要艺术家（处理 "艺术家1、艺术家2" 或 "艺术家1/艺术家2" 格式）
+  result = result.split(/[、,\/&]+/)[0].trim();
+  return result;
+}
+
 function addWeightedTerms(map, terms, weight) {
   for (const term of terms || []) {
     if (!term) continue;
@@ -717,6 +745,35 @@ function buildTrackKey(track) {
   return `${artist}::${title}`;
 }
 
+// 去重函数：同名歌曲去重 + 同一艺术家最多2首
+function deduplicateTracks(rows, count) {
+  const selected = [];
+  const seen = new Set();
+  const seenTitles = new Set();
+  const artistCount = new Map();
+  const MAX_ARTIST_SONGS = 2;
+
+  for (const track of rows) {
+    const key = buildTrackKey(track);
+    if (seen.has(key)) continue;
+    
+    const titleKey = cleanMatchText(track.title);
+    if (seenTitles.has(titleKey)) continue;
+    
+    const artist = normalizeArtistName(track.artist);
+    const currentCount = artistCount.get(artist) || 0;
+    if (currentCount >= MAX_ARTIST_SONGS) continue;
+    
+    seen.add(key);
+    seenTitles.add(titleKey);
+    artistCount.set(artist, currentCount + 1);
+    selected.push(track);
+    if (selected.length >= count) break;
+  }
+  
+  return selected;
+}
+
 function selectTracksForTheme(rows, theme, count) {
   const profile = buildThemeProfile(theme);
   const intent = parseThemeIntent(theme);
@@ -756,6 +813,7 @@ function selectTracksForTheme(rows, theme, count) {
 
   const selected = [];
   const seen = new Set();
+  const seenTitles = new Set(); // 同名歌曲去重（不管艺术家）
   const artistCount = new Map(); // 统计每个艺术家已有几首歌
   const MAX_ARTIST_SONGS = 2; // 同一个艺术家最多两首歌，除非用户特别指定
 
@@ -767,12 +825,17 @@ function selectTracksForTheme(rows, theme, count) {
     const key = buildTrackKey(item.track);
     if (seen.has(key)) continue;
     
-    // 检查同一个艺术家数量限制
-    const artist = cleanMatchText(item.track.artist);
+    // 检查同名歌曲（不管艺术家）
+    const titleKey = cleanMatchText(item.track.title);
+    if (seenTitles.has(titleKey)) continue;
+    
+    // 检查同一个艺术家数量限制（简繁体统一）
+    const artist = normalizeArtistName(item.track.artist);
     const currentCount = artistCount.get(artist) || 0;
     if (currentCount >= MAX_ARTIST_SONGS) continue;
     
     seen.add(key);
+    seenTitles.add(titleKey);
     artistCount.set(artist, currentCount + 1);
     selected.push(item.track);
     if (selected.length >= count) break;
@@ -783,11 +846,15 @@ function selectTracksForTheme(rows, theme, count) {
       const key = buildTrackKey(item.track);
       if (seen.has(key)) continue;
       
-      const artist = cleanMatchText(item.track.artist);
+      const titleKey = cleanMatchText(item.track.title);
+      if (seenTitles.has(titleKey)) continue;
+      
+      const artist = normalizeArtistName(item.track.artist);
       const currentCount = artistCount.get(artist) || 0;
       if (currentCount >= MAX_ARTIST_SONGS) continue;
       
       seen.add(key);
+      seenTitles.add(titleKey);
       artistCount.set(artist, currentCount + 1);
       selected.push(item.track);
       if (selected.length >= count) break;
@@ -845,6 +912,9 @@ async function generatePlaylist(theme, count = DEFAULT_PLAYLIST_COUNT) {
 
       if (theme.toLowerCase() !== 'random') {
         rows = selectTracksForTheme(rows, theme, safeCount);
+      } else {
+        // random 主题也需要去重
+        rows = deduplicateTracks(rows, safeCount);
       }
 
       // 加载艺术家元数据
@@ -916,7 +986,7 @@ function createDesktopShortcut(targetPath) {
 // 生成传统黑胶唱片风格HTML
 function generateVinylHtml(theme, tracks, artistMetadata, lyricsMap) {
   const style = getThemeStyle(theme);
-  const musicRoot = 'D:\\OPC-Workbench\\music';
+  const musicRoot = 'YOUR_MUSIC_PROJECT_DIR';
   
   // 找一个有封面的歌曲作为主封面
   let mainCover = '';
@@ -1828,4 +1898,5 @@ if (require.main === module) {
 }
 
 module.exports = { generatePlaylist, chooseAutoTheme };
+
 
