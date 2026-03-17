@@ -34,6 +34,11 @@ This is an OpenClaw skill plugin that helps you manage your personal music libra
 - 🔗 **随处访问**：配合 Tailscale 内网穿透，在外网也能随时访问你的私人音乐库
 - ⚡ **快速生成**：本地数据库索引，30秒内即可生成歌单
 - 📱 **移动端友好**：生成的网页自适应手机屏幕，随时收听
+- 💾 **离线缓存**：支持 IndexedDB 本地缓存，缓存后无需网络也能播放
+- 📊 **缓存进度条**：可视化显示缓存进度，支持边播放边缓存
+- 🔒 **锁屏控制**：Media Session API 支持手机锁屏时控制播放
+- 🔄 **断点续播**：记住播放位置，下次打开自动恢复
+- 🛡️ **错误恢复**：网络中断自动重试，播放更稳定
 
 ### 🇬🇧 English
 - 🧠 **Smart Theme Matching**: Semantically understands your request, automatically filters and matches songs based on mood, scene, decade, and style
@@ -41,6 +46,11 @@ This is an OpenClaw skill plugin that helps you manage your personal music libra
 - 🔗 **Access Anywhere**: Works with Tailscale for penetration, you can access your personal music library from anywhere on the internet
 - ⚡ **Fast Generation**: Local database indexing, generates a playlist within 30 seconds
 - 📱 **Mobile Friendly**: Generated web page automatically adapts to mobile screens, listen anytime anywhere
+- 💾 **Offline Cache**: Supports IndexedDB local caching, play without network after cached
+- 📊 **Cache Progress Bar**: Visual cache progress display, supports play while caching
+- 🔒 **Lock Screen Control**: Media Session API supports playback control when phone is locked
+- 🔄 **Resume Playback**: Remembers playback position, auto-resumes next time
+- 🛡️ **Error Recovery**: Auto-retry on network interruption, more stable playback
 
 ### 🇷🇺 Русский
 - 🧠 **Умное подбор темы**: Семантически понимает ваш запрос, автоматически фильтрует и подбирает песни по настроению, сцене, десятилетию и стилю
@@ -48,6 +58,11 @@ This is an OpenClaw skill plugin that helps you manage your personal music libra
 - 🔗 **Доступ отовсюду**: Работает с Tailscale для туннелирования, вы можете получить доступ к своей личной музыкальной библиотеке из любой точки интернета
 - ⚡ **Быстрая генерация**: Локальная индексация базы данных, плейлист создается за 30 секунд
 - 📱 **Удобство для мобильных**: Сгенерированная веб-страница автоматически адаптируется к экранам мобильных устройств, слушайте где угодно
+- 💾 **Офлайн-кэш**: Поддержка локального кэширования IndexedDB, воспроизведение без сети после кэширования
+- 📊 **Индикатор кэширования**: Визуальное отображение прогресса кэширования, воспроизведение во время кэширования
+- 🔒 **Управление с заблокированного экрана**: Media Session API поддерживает управление воспроизведением при заблокированном телефоне
+- 🔄 **Возобновление воспроизведения**: Запоминает позицию воспроизведения, автоматически возобновляет в следующий раз
+- 🛡️ **Восстановление после ошибок**: Автоматический повтор при прерывании сети, более стабильное воспроизведение
 
 ---
 
