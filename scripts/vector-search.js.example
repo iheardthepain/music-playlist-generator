@@ -1,0 +1,296 @@
+'use strict';
+
+/**
+ * vector-search.js
+ * 语义向量搜索模块：
+ * 1. 对查询主题调用 embedding API 得到查询向量
+ * 2. 从 tracks_embeddings 表批量加载歌曲向量（或分块）
+ * 3. 计算余弦相似度，返回 Top-K 候选 track_id 列表
+ *
+ * 此模块是 generate-playlist.js 的可选增强，不破坏原有关键词匹配逻辑。
+ */
+
+const https = require('https');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
+const config = require('../config.json');
+
+const DB_PATH = path.resolve(__dirname, '../', config.database.path);
+
+const EMBEDDING_API_KEY  = process.env.EMBEDDING_API_KEY || '';
+const EMBEDDING_ENDPOINT = process.env.EMBEDDING_ENDPOINT ||
+  config.embedding?.endpoint ||
+  'YOUR_EMBEDDING_ENDPOINT';
+const EMBEDDING_MODEL    = process.env.EMBEDDING_MODEL ||
+  config.embedding?.model ||
+  'YOUR_EMBEDDING_MODEL';
+
+// ─── 工具 ─────────────────────────────────────────────────────────────────────
+
+/** Buffer → Float32Array */
+function bufferToFloat32(buf) {
+  const arr = new Float32Array(buf.length / 4);
+  for (let i = 0; i < arr.length; i++) {
+    arr[i] = buf.readFloatLE(i * 4);
+  }
+  return arr;
+}
+
+/** 余弦相似度（两个 Float32Array 或普通数组） */
+function cosineSimilarity(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    dot += a[i] * b[i];
+    na  += a[i] * a[i];
+    nb  += b[i] * b[i];
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/** 调用 embedding API，文本可以是 string 或 string[] */
+async function getQueryEmbedding(text) {
+  if (!EMBEDDING_API_KEY) {
+    throw new Error('未设置 EMBEDDING_API_KEY，无法使用向量搜索');
+  }
+
+  const body = JSON.stringify({
+    model: EMBEDDING_MODEL,
+    input: [{
+      type: 'text',
+      text: text
+    }]
+  });
+
+  return new Promise((resolve, reject) => {
+    const url = new URL(EMBEDDING_ENDPOINT);
+    const options = {
+      hostname: url.hostname,
+      port: 443,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${EMBEDDING_API_KEY}`,
+        'Content-Length': Buffer.byteLength(body)
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => raw += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`embedding API HTTP ${res.statusCode}: ${raw.slice(0, 200)}`));
+        }
+        try {
+          const json = JSON.parse(raw);
+          // 兼容两种格式：
+          // 1. 纯文本：json.data[0].embedding
+          // 2. 多模态：json.data.embedding
+          let embedding;
+          if (json.data && Array.isArray(json.data.embedding)) {
+            // 多模态单条
+            embedding = json.data.embedding;
+          } else if (json.data && Array.isArray(json.data) && json.data[0] && json.data[0].embedding) {
+            // 纯文本批量
+            embedding = json.data[0].embedding;
+          } else {
+            return reject(new Error(`embedding API 响应格式异常: ${raw.slice(0, 300)}`));
+          }
+          resolve(new Float32Array(embedding));
+        } catch (e) {
+          reject(new Error(`embedding 响应解析失败: ${e.message}`));
+        }
+      });
+    });
+
+    req.setTimeout(30000, () => {
+      req.destroy();
+      reject(new Error('embedding API 请求超时'));
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function dbAll(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows));
+  });
+}
+
+function dbGet(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => err ? reject(err) : resolve(row));
+  });
+}
+
+/**
+ * 检查向量数据库中有多少首歌已有向量
+ * @returns {Promise<{total: number, withEmbedding: number, coverage: string}>}
+ */
+async function getEmbeddingStats() {
+  return new Promise((resolve, reject) => {
+    const db = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READONLY, (err) => {
+      if (err) return reject(err);
+    });
+    db.serialize(() => {
+      db.get(`SELECT COUNT(*) as n FROM tracks`, (e1, r1) => {
+        if (e1) { db.close(); return reject(e1); }
+        db.get(`SELECT COUNT(*) as n FROM tracks_embeddings`, (e2, r2) => {
+          db.close();
+          if (e2) {
+            // 表不存在时返回 0
+            return resolve({ total: r1.n, withEmbedding: 0, coverage: '0.0%' });
+          }
+          const total = r1.n;
+          const withEmbedding = r2.n;
+          const pct = total > 0 ? ((withEmbedding / total) * 100).toFixed(1) : '0.0';
+          resolve({ total, withEmbedding, coverage: `${pct}%` });
+        });
+      });
+    });
+  });
+}
+
+/**
+ * 语义向量搜索主函数
+ * @param {string} theme - 用户输入的主题
+ * @param {object} options
+ * @param {number} options.topK           - 返回 Top-K 候选（默认 200）
+ * @param {number} options.minSimilarity  - 最低相似度阈值（默认 0.3）
+ * @param {number} options.chunkSize      - 分块加载向量的大小（默认 5000，防止 OOM）
+ * @returns {Promise<{trackIds: number[], similarities: Map<number,number>, queryEmbedding: Float32Array}>}
+ */
+async function vectorSearch(theme, options = {}) {
+  const {
+    topK          = 200,
+    minSimilarity = 0.3,
+    chunkSize     = 5000
+  } = options;
+
+  // 1. 构建查询文本（与 generate-embeddings.js 格式对齐）
+  const queryText = `歌单主题：${theme}\n情绪氛围：${theme}`;
+
+  // 2. 获取查询向量
+  const queryVec = await getQueryEmbedding(queryText);
+
+  // 3. 分块加载歌曲向量，计算相似度
+  const db = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READONLY);
+
+  try {
+    // 检查表是否存在
+    const tableCheck = await dbGet(db,
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='tracks_embeddings'`
+    );
+    if (!tableCheck) {
+      throw new Error('tracks_embeddings 表不存在，请先运行 generate-embeddings.js');
+    }
+
+    const totalRow = await dbGet(db, `SELECT COUNT(*) as n FROM tracks_embeddings`);
+    const total = totalRow.n;
+
+    if (total === 0) {
+      throw new Error('向量库为空，请先运行 generate-embeddings.js 生成向量');
+    }
+
+    // 用简单数组 + 排序（对大多数音乐库规模足够快）
+    const results = []; // [{track_id, sim}]
+
+    let offset = 0;
+    while (offset < total) {
+      const rows = await dbAll(db,
+        `SELECT track_id, embedding FROM tracks_embeddings LIMIT ? OFFSET ?`,
+        [chunkSize, offset]
+      );
+      offset += rows.length;
+
+      for (const row of rows) {
+        const vec = bufferToFloat32(row.embedding);
+        const sim = cosineSimilarity(queryVec, vec);
+        if (sim >= minSimilarity) {
+          results.push({ track_id: row.track_id, sim });
+        }
+      }
+    }
+
+    // 按相似度降序排，取 TopK
+    results.sort((a, b) => b.sim - a.sim);
+    const topResults = results.slice(0, topK);
+
+    const trackIds = topResults.map(r => r.track_id);
+    const similarities = new Map(topResults.map(r => [r.track_id, r.sim]));
+
+    return { trackIds, similarities, queryEmbedding: queryVec };
+
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * 对已通过关键词匹配选出的候选歌曲，用向量重新排序（混合搜索）
+ * @param {object[]} tracks     - 候选歌曲列表（含 id 字段）
+ * @param {string}   theme      - 主题
+ * @param {object}   opts
+ * @param {number}   opts.vectorWeight  - 向量分权重（0~1，默认 0.4）
+ * @param {number}   opts.keywordWeight - 关键词分权重（0~1，默认 0.6）
+ * @returns {Promise<object[]>} - 重排后的歌曲列表
+ */
+async function hybridRerank(tracks, theme, opts = {}) {
+  if (!tracks || tracks.length === 0) return tracks;
+
+  const { vectorWeight = 0.4, keywordWeight = 0.6 } = opts;
+
+  let similarities;
+  try {
+    const trackIds = tracks.map(t => t.id);
+    const queryText = `歌单主题：${theme}\n情绪氛围：${theme}`;
+    const queryVec = await getQueryEmbedding(queryText);
+
+    // 只加载候选歌曲的向量（少量，效率高）
+    const db = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READONLY);
+    try {
+      const placeholders = trackIds.map(() => '?').join(',');
+      const rows = await dbAll(db,
+        `SELECT track_id, embedding FROM tracks_embeddings WHERE track_id IN (${placeholders})`,
+        trackIds
+      );
+      similarities = new Map();
+      for (const row of rows) {
+        const vec = bufferToFloat32(row.embedding);
+        similarities.set(row.track_id, cosineSimilarity(queryVec, vec));
+      }
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    // 向量获取失败，不影响原始排序
+    console.warn(`[vector-search] hybridRerank 失败（跳过向量重排）: ${err.message}`);
+    return tracks;
+  }
+
+  // 找最大关键词分（用于归一化，tracks 可能已带 _keywordScore）
+  const maxKw = Math.max(1, ...tracks.map(t => t._keywordScore || 0));
+
+  return tracks
+    .map(t => {
+      const kwScore  = (t._keywordScore || 0) / maxKw;
+      const vecScore = similarities.get(t.id) || 0;
+      const combined = keywordWeight * kwScore + vectorWeight * vecScore;
+      return { ...t, _vectorScore: vecScore, _combinedScore: combined };
+    })
+    .sort((a, b) => b._combinedScore - a._combinedScore);
+}
+
+module.exports = {
+  vectorSearch,
+  hybridRerank,
+  getQueryEmbedding,
+  cosineSimilarity,
+  getEmbeddingStats
+};

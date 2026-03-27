@@ -1,0 +1,401 @@
+'use strict';
+
+/**
+ * generate-embeddings.js
+ * 批量为音乐库中每首歌生成语义向量（embedding）并存入 tracks_embeddings 表。
+ *
+ * 使用兼容 OpenAI embedding API 格式的 embedding 服务。
+ * API 端点：配置在 config.json 或环境变量中
+ * 模型：配置在 config.json 或环境变量中
+ *
+ * 用法：
+ *   node scripts/generate-embeddings.js [--batch 32] [--concurrency 4] [--resume] [--limit 1000]
+ *
+ * 参数：
+ *   --batch N        每批发送 N 首到 embedding API（默认 32，API 单次最多 100 条）
+ *   --concurrency N  同时并发 N 个批次请求（默认 3）
+ *   --resume         跳过已有向量的歌曲（默认 true，加 --no-resume 重跑全部）
+ *   --limit N        只处理前 N 首（调试用）
+ *   --dry-run        只打印要处理的歌曲数量，不实际调用 API
+ */
+
+const sqlite3 = require('sqlite3').verbose();
+const https = require('https');
+const path = require('path');
+const crypto = require('crypto');
+const config = require('../config.json');
+const { initEmbeddingsTable } = require('./init-embeddings-db');
+
+// ─── 配置 ────────────────────────────────────────────────────────────────────
+
+const DB_PATH = path.resolve(__dirname, '../', config.database.path);
+
+const EMBEDDING_API_KEY = process.env.EMBEDDING_API_KEY || '';
+const EMBEDDING_ENDPOINT = process.env.EMBEDDING_ENDPOINT ||
+  config.embedding?.endpoint ||
+  'YOUR_EMBEDDING_ENDPOINT';
+const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ||
+  config.embedding?.model ||
+  'YOUR_EMBEDDING_MODEL';
+const EMBEDDING_DIM = config.embedding?.dim || 2048;
+
+// 解析命令行参数
+const args = process.argv.slice(2);
+function getArg(flag, defaultVal) {
+  const idx = args.indexOf(flag);
+  if (idx === -1) return defaultVal;
+  return args[idx + 1] !== undefined ? Number(args[idx + 1]) : defaultVal;
+}
+const BATCH_SIZE   = getArg('--batch', 32);
+const CONCURRENCY  = getArg('--concurrency', 3);
+const LIMIT        = getArg('--limit', 0);       // 0 = 不限制
+const RESUME       = !args.includes('--no-resume');
+const DRY_RUN      = args.includes('--dry-run');
+
+// ─── 工具函数 ─────────────────────────────────────────────────────────────────
+
+/** 构建用于向量化的文本（标题+艺术家+流派+歌词预览） */
+function buildEmbeddingText(track, lyricsPreview) {
+  const parts = [];
+  if (track.title)   parts.push(`歌曲：${track.title}`);
+  if (track.artist)  parts.push(`艺术家：${track.artist}`);
+  if (track.genre)   parts.push(`流派：${track.genre}`);
+  if (track.language) parts.push(`语言：${track.language}`);
+  if (track.mood)    parts.push(`情绪：${track.mood}`);
+  if (track.era)     parts.push(`年代：${track.era}`);
+  if (lyricsPreview) parts.push(`歌词：${lyricsPreview.slice(0, 400)}`);
+  return parts.join('\n');
+}
+
+/** 对文本做 MD5，用于检测内容变化 */
+function hashText(text) {
+  return crypto.createHash('md5').update(text, 'utf8').digest('hex');
+}
+
+/** Float32Array → Buffer */
+function float32ToBuffer(arr) {
+  const buf = Buffer.allocUnsafe(arr.length * 4);
+  for (let i = 0; i < arr.length; i++) {
+    buf.writeFloatLE(arr[i], i * 4);
+  }
+  return buf;
+}
+
+/** Buffer → Float32Array */
+function bufferToFloat32(buf) {
+  const arr = new Float32Array(buf.length / 4);
+  for (let i = 0; i < arr.length; i++) {
+    arr[i] = buf.readFloatLE(i * 4);
+  }
+  return arr;
+}
+
+/** 余弦相似度（两个 Float32Array） */
+function cosineSimilarity(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na  += a[i] * a[i];
+    nb  += b[i] * b[i];
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/** sleep */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ─── API 调用 ─────────────────────────────────────────────────────────────────
+
+/**
+ * 调用 embedding API，返回 embedding 二维数组
+ * @param {string[]} texts - 最多 100 条文本
+ * @returns {Promise<number[][]>}
+ */
+async function callEmbeddingAPI(texts) {
+  if (!EMBEDDING_API_KEY) {
+    throw new Error('未设置 EMBEDDING_API_KEY 环境变量');
+  }
+
+  const body = JSON.stringify({
+    model: EMBEDDING_MODEL,
+    input: texts.map(text => ({
+      type: 'text',
+      text: text
+    }))
+  });
+
+  return new Promise((resolve, reject) => {
+    const url = new URL(EMBEDDING_ENDPOINT);
+    const options = {
+      hostname: url.hostname,
+      port: 443,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${EMBEDDING_API_KEY}`,
+        'Content-Length': Buffer.byteLength(body)
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => raw += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`API HTTP ${res.statusCode}: ${raw.slice(0, 300)}`));
+        }
+        try {
+          const json = JSON.parse(raw);
+          // 兼容多种响应格式：
+          // 1. 纯文本批量：json.data = [{index, embedding}, ...]
+          // 2. 多模态批量：json.data = [{embedding}, ...]
+          // 3. 多模态单条：json.data = {embedding}
+          let embeddings;
+          if (Array.isArray(json.data)) {
+            embeddings = json.data.map(item => item.embedding);
+          } else if (json.data && Array.isArray(json.data.embedding)) {
+            embeddings = [json.data.embedding];
+          } else {
+            return reject(new Error(`API 响应格式异常: ${raw.slice(0, 500)}`));
+          }
+          resolve(embeddings);
+        } catch (e) {
+          reject(new Error(`JSON 解析失败: ${e.message}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.setTimeout(60000, () => {
+      req.destroy();
+      reject(new Error('API 请求超时（60s）'));
+    });
+    req.write(body);
+    req.end();
+  });
+}
+
+/**
+ * 带重试的 embedding 调用
+ */
+async function callEmbeddingAPIWithRetry(texts, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await callEmbeddingAPI(texts);
+    } catch (err) {
+      const isLast = attempt === retries;
+      const delay = attempt * 2000;
+      console.warn(`  [embedding] 第 ${attempt} 次失败: ${err.message}${isLast ? '（放弃）' : `，${delay}ms 后重试`}`);
+      if (isLast) throw err;
+      await sleep(delay);
+    }
+  }
+}
+
+// ─── 数据库操作 ───────────────────────────────────────────────────────────────
+
+function dbAll(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows));
+  });
+}
+
+function dbRun(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function(err) {
+      if (err) return reject(err);
+      resolve(this);
+    });
+  });
+}
+
+function dbGet(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => err ? reject(err) : resolve(row));
+  });
+}
+
+/** 批量 upsert embedding */
+async function upsertEmbeddings(db, items) {
+  // items: [{track_id, embedding: Float32Array, text_hash}]
+  const stmt = db.prepare(`
+    INSERT INTO tracks_embeddings (track_id, model, dim, embedding, text_hash, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(track_id) DO UPDATE SET
+      model      = excluded.model,
+      dim        = excluded.dim,
+      embedding  = excluded.embedding,
+      text_hash  = excluded.text_hash,
+      updated_at = excluded.updated_at
+  `);
+
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run('BEGIN');
+      let err = null;
+      for (const item of items) {
+        const buf = float32ToBuffer(new Float32Array(item.embedding));
+        stmt.run(
+          [item.track_id, EMBEDDING_MODEL, EMBEDDING_DIM, buf, item.text_hash],
+          (e) => { if (e) err = e; }
+        );
+      }
+      stmt.finalize();
+      if (err) {
+        db.run('ROLLBACK');
+        return reject(err);
+      }
+      db.run('COMMIT', (e2) => {
+        if (e2) return reject(e2);
+        resolve();
+      });
+    });
+  });
+}
+
+// ─── 主逻辑 ───────────────────────────────────────────────────────────────────
+
+async function main() {
+  console.log('[generate-embeddings] 启动');
+  console.log(`  模型: ${EMBEDDING_MODEL}`);
+  console.log(`  批大小: ${BATCH_SIZE}  并发: ${CONCURRENCY}  续跑: ${RESUME}  DryRun: ${DRY_RUN}`);
+  console.log(`  API端点: ${EMBEDDING_ENDPOINT}`);
+
+  if (!EMBEDDING_API_KEY) {
+    console.error('[generate-embeddings] 错误: 需要设置 EMBEDDING_API_KEY 环境变量');
+    process.exit(1);
+  }
+
+  // 确保表存在
+  await initEmbeddingsTable();
+
+  const db = new sqlite3.Database(DB_PATH);
+
+  try {
+    // 取所有 tracks（含歌词预览）
+    const allTracks = await dbAll(db, `
+      SELECT t.id, t.title, t.artist, t.genre, t.language, t.mood, t.era,
+             COALESCE(l.lyrics, '') AS lyrics_text
+      FROM tracks t
+      LEFT JOIN lyrics l ON l.track_id = t.id
+      ORDER BY t.id
+    `);
+
+    // 取已有向量的 track_id+text_hash
+    const existing = await dbAll(db, `SELECT track_id, text_hash FROM tracks_embeddings`);
+    const existingMap = new Map(existing.map(r => [r.track_id, r.text_hash]));
+
+    // 过滤需要处理的
+    let pending = allTracks.filter(track => {
+      const text = buildEmbeddingText(track, track.lyrics_text);
+      const hash = hashText(text);
+      if (RESUME && existingMap.has(track.id) && existingMap.get(track.id) === hash) {
+        return false; // 内容没变，跳过
+      }
+      track._embeddingText = text;
+      track._textHash      = hash;
+      return true;
+    });
+
+    if (LIMIT > 0) pending = pending.slice(0, LIMIT);
+
+    const alreadyDone = allTracks.length - pending.length;
+    console.log(`\n  总歌曲: ${allTracks.length}  已完成: ${alreadyDone}  待处理: ${pending.length}`);
+
+    if (DRY_RUN || pending.length === 0) {
+      console.log('[generate-embeddings] DryRun/无需处理，退出。');
+      db.close();
+      return;
+    }
+
+    // 记录任务
+    const jobResult = await dbRun(db, `
+      INSERT INTO embedding_jobs (started_at, total, done, failed, model, status)
+      VALUES (datetime('now'), ?, 0, 0, ?, 'running')
+    `, [pending.length, EMBEDDING_MODEL]);
+    const jobId = jobResult.lastID;
+
+    // 分批
+    const batches = [];
+    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+      batches.push(pending.slice(i, i + BATCH_SIZE));
+    }
+
+    let totalDone = 0;
+    let totalFailed = 0;
+    const startTime = Date.now();
+
+    // 并发控制
+    let batchIdx = 0;
+    async function worker() {
+      while (batchIdx < batches.length) {
+        const myIdx = batchIdx++;
+        const batch  = batches[myIdx];
+        const texts  = batch.map(t => t._embeddingText);
+
+        try {
+          const embeddings = await callEmbeddingAPIWithRetry(texts);
+
+          const items = batch.map((track, i) => ({
+            track_id: track.id,
+            embedding: embeddings[i],
+            text_hash: track._textHash
+          }));
+
+          await upsertEmbeddings(db, items);
+          totalDone += batch.length;
+
+          // 更新进度
+          await dbRun(db, `UPDATE embedding_jobs SET done=? WHERE id=?`, [totalDone + alreadyDone, jobId]);
+
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          const pct = ((totalDone / pending.length) * 100).toFixed(1);
+          const speed = (totalDone / (elapsed || 1)).toFixed(1);
+          const remaining = ((pending.length - totalDone) / (speed || 1)).toFixed(0);
+          process.stdout.write(
+            `\r  进度: ${totalDone}/${pending.length} (${pct}%)  速度: ${speed}首/s  剩余: ${remaining}s  失败: ${totalFailed}  `
+          );
+
+        } catch (err) {
+          totalFailed += batch.length;
+          console.error(`\n  [批次${myIdx}] 失败: ${err.message}`);
+          await dbRun(db, `UPDATE embedding_jobs SET failed=? WHERE id=?`, [totalFailed, jobId]);
+        }
+      }
+    }
+
+    // 启动并发 workers
+    const workers = Array.from({ length: CONCURRENCY }, () => worker());
+    await Promise.all(workers);
+
+    console.log('\n');
+
+    // 标记完成
+    await dbRun(db, `
+      UPDATE embedding_jobs
+      SET finished_at=datetime('now'), done=?, failed=?, status=?
+      WHERE id=?
+    `, [totalDone + alreadyDone, totalFailed, totalFailed === 0 ? 'done' : 'partial', jobId]);
+
+    const totalSec = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[generate-embeddings] 完成！`);
+    console.log(`  成功: ${totalDone}  失败: ${totalFailed}  耗时: ${totalSec}s`);
+
+    // 最终统计
+    const finalCount = await dbGet(db, `SELECT COUNT(*) as n FROM tracks_embeddings`);
+    console.log(`  tracks_embeddings 总行数: ${finalCount.n} / ${allTracks.length}`);
+
+  } finally {
+    db.close();
+  }
+}
+
+main().catch(err => {
+  console.error('[generate-embeddings] 致命错误:', err.message);
+  process.exit(1);
+});

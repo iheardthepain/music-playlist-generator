@@ -1,4 +1,4 @@
-# 🎵 Music Playlist Generator - OpenClaw 私人音乐库智能歌单生成技能
+# 🎵 Music Playlist Generator v2.0 - OpenClaw 私人音乐库智能歌单生成技能
 
 ---
 
@@ -29,6 +29,9 @@ This is an OpenClaw skill plugin that helps you manage your personal music libra
 ## ✨ 功能特点 | ✨ Features | ✨ Особенности
 
 ### 🇨🇳 中文
+- 🔍 **语义向量搜索**：使用语义向量嵌入（支持自定义 Embedding API），根据主题语义匹配歌曲，而非简单关键词
+- 🏠 **局域网免登录**：局域网设备自动免登录直接播放，公网访问保持安全认证
+- ⚙️ **智能降级**：向量搜索不可用时自动降级到关键词匹配，保证稳定性
 - 🧠 **智能主题匹配**：语义理解你的需求，根据心情、场景、年代、风格自动筛选匹配歌曲
 - 🎨 **高颜值唱片UI**：生成黑胶唱片风格的可视化网页歌单，播放时自动旋转，沉浸式体验
 - 🔗 **随处访问**：配合 Tailscale 内网穿透，在外网也能随时访问你的私人音乐库
@@ -41,6 +44,9 @@ This is an OpenClaw skill plugin that helps you manage your personal music libra
 - 🛡️ **错误恢复**：网络中断自动重试，播放更稳定
 
 ### 🇬🇧 English
+- 🔍 **Semantic Vector Search**: Uses semantic vector embeddings (supports custom Embedding API) to match songs by theme meaning, not just keywords
+- 🏠 **LAN Auto-Access**: LAN devices automatically bypass login for direct playback, while public network access remains secured
+- ⚙️ **Smart Fallback**: Automatically falls back to keyword matching when vector search is unavailable, ensuring stability
 - 🧠 **Smart Theme Matching**: Semantically understands your request, automatically filters and matches songs based on mood, scene, decade, and style
 - 🎨 **Beautiful Record UI**: Generates a visual web playlist in vinyl record style, automatically rotates during playback for an immersive experience
 - 🔗 **Access Anywhere**: Works with Tailscale for penetration, you can access your personal music library from anywhere on the internet
@@ -53,6 +59,9 @@ This is an OpenClaw skill plugin that helps you manage your personal music libra
 - 🛡️ **Error Recovery**: Auto-retry on network interruption, more stable playback
 
 ### 🇷🇺 Русский
+- 🔍 **Семантический векторный поиск**: Использует семантические векторные вложения (поддержка пользовательского Embedding API) для сопоставления песен по смыслу темы, а не только по ключевым словам
+- 🏠 **Авто-доступ из локальной сети**: Устройства в локальной сети автоматически обходят авторизацию для прямого воспроизведения, при этом доступ из интернета остается защищенным
+- ⚙️ **Умный откат**: Автоматически переключается на поиск по ключевым словам при недоступности векторного поиска, обеспечивая стабильность
 - 🧠 **Умное подбор темы**: Семантически понимает ваш запрос, автоматически фильтрует и подбирает песни по настроению, сцене, десятилетию и стилю
 - 🎨 **Красивый интерфейс пластинки**: Создает визуальный веб-плейлист в стиле виниловой пластинки, автоматически вращается во время воспроизведения для погружения
 - 🔗 **Доступ отовсюду**: Работает с Tailscale для туннелирования, вы можете получить доступ к своей личной музыкальной библиотеке из любой точки интернета
@@ -73,18 +82,21 @@ This is an OpenClaw skill plugin that helps you manage your personal music libra
 - 已导入歌曲元数据索引导入到 SQLite 数据库
 - OpenClaw 运行环境
 - 可选：Tailscale 内网穿透，实现外网访问
+- 可选：Embedding API 用于语义向量搜索（如 OpenAI、Azure、ARK 等提供的 embedding 服务）
 
 ### 🇬🇧 English
 - You need to have an organized local music library (song files stored on local disk)
 - You have imported song metadata indexes into SQLite database
 - OpenClaw runtime environment
 - Optional: Tailscale penetration for external network access
+- Optional: Embedding API for semantic vector search (e.g., OpenAI, Azure, ARK or other embedding services)
 
 ### 🇷🇺 Русский
 - Вам нужна организованная локальная музыкальная библиотека (файлы песен хранятся на локальном диске)
 - Вы импортировали индексы метаданных песен в базу данных SQLite
 - Среда выполнения OpenClaw
 - Опционально: Туннелирование Tailscale для доступа из внешней сети
+- Опционально: Embedding API для семантического векторного поиска (например, OpenAI, Azure, ARK или другие embedding-сервисы)
 
 ---
 

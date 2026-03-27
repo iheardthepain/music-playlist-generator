@@ -1,15 +1,31 @@
 {
-  "database": {
-    "path": "data/index.db"
-  },
   "server": {
     "port": 3000,
-    "baseUrl": "http://localhost:3000"
+    "host": "0.0.0.0",
+    "publicBaseUrl": "https://your-domain-or-ip"
+  },
+  "auth": {
+    "enabled": true,
+    "sessionDays": 7
+  },
+  "database": {
+    "path": "data/index.db"
   },
   "playlist": {
     "defaultCount": 20,
     "maxCount": 50,
     "summaryCount": 20,
-    "messageSummaryCount": 8
+    "messageSummaryCount": 8,
+    "useVectorSearch": true
+  },
+  "embedding": {
+    "model": "your-embedding-model-id",
+    "endpoint": "https://your-embedding-api-endpoint",
+    "dim": 2048
+  },
+  "playback": {
+    "transcodeToAac": false,
+    "smartTranscodeLossless": true,
+    "aacBitrate": "192k"
   }
 }

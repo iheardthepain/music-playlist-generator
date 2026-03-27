@@ -1,4 +1,4 @@
-﻿# Music Playlist Generator Skill (Shared Edition)
+# Music Playlist Generator Skill (Shared Edition)
 
 ## Purpose
 
@@ -25,10 +25,16 @@ Use placeholders and environment variables instead.
 ## Entrypoint Contract
 
 Single production entrypoint:
-- node scripts/generate-playlist.js "{theme}" [count]
+- node scripts/generate-playlist.js "{theme}" [count] [--searchMode]
 
 Execution template:
 - Set-Location {PROJECT_DIR}; node scripts/generate-playlist.js "{theme}" [count]
+
+Search mode parameter (optional):
+- `--keyword`  — pure keyword matching (original logic)
+- `--vector`   — pure semantic vector search
+- `--hybrid`   — keyword initial filter + vector re-ranking
+- (omitted / `auto`) — reads `config.json` → `playlist.useVectorSearch` to decide
 
 Return policy:
 - Return stdout directly as one final user-facing message
@@ -54,10 +60,10 @@ Expected output blocks:
 
 ## Theme Understanding Strategy
 
-Use low-cost local intelligence by default:
-- semantic keyword weighting
-- intent constraints (region/language/decade)
-- controlled fallback when strict filters are too narrow
+Default strategy depends on configuration:
+- When `playlist.useVectorSearch` is enabled (recommended): uses **semantic vector search** to match songs by meaning. The system embeds the theme text via the configured Embedding API, then computes cosine similarity against pre-computed song embeddings to find the best matches.
+- When vector search is not configured: falls back to **keyword matching** with semantic keyword weighting, intent constraints (region/language/decade), and controlled fallback when strict filters are too narrow.
+- When vector search is configured but fails at runtime: **automatically degrades** to keyword matching, ensuring stability.
 
 Examples:
 - 欧美流行歌曲 -> western/english preference
@@ -71,12 +77,19 @@ Important config keys:
 - playlist.summaryCount
 - playlist.messageSummaryCount
 - playlist.maxCount
+- playlist.useVectorSearch — enable semantic vector search (true/false, default false)
+
+Vector search config (required when useVectorSearch is true):
+- embedding.model — embedding model identifier (e.g. your model ID from the embedding provider)
+- embedding.endpoint — embedding API endpoint URL
+- embedding.dim — embedding vector dimension (e.g. 2048)
 
 Recommended environment variables:
 - MUSIC_PROJECT_DIR
 - PLAYLIST_BASE_URL
 - FEISHU_CHAT_TARGET
 - ENABLE_LEGACY_FEISHU (default false)
+- EMBEDDING_API_KEY — API key for the embedding service (required for vector search)
 
 ## Legacy Isolation
 
@@ -108,6 +121,8 @@ Temporary rollback only:
 - node scripts/generate-playlist.js "欧美流行歌曲" 20
 - node scripts/generate-playlist.js "90年代华语流行" 20
 - node scripts/generate-playlist.js "random" 20
+- node scripts/generate-playlist.js "雨天发呆" 20 --vector
+- node scripts/generate-playlist.js "深夜独处" 20 --hybrid
 
 Checklist:
 - output contains one valid playlist URL
@@ -116,4 +131,4 @@ Checklist:
 
 ## Version
 
-Shared Edition 2026-03-15
+Shared Edition 2026-03-27
