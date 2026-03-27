@@ -4,9 +4,7 @@
 
 1. 你需要有：
    - 一个运行中的 OpenClaw 实例
-   - 一个本地音乐库，所有歌曲文件存储在本地磁盘
-   - 已将歌曲元数据索引导入到 SQLite 数据库
-   - 一个静态文件web服务器用于提供歌单访问
+   - 一个本地音乐库，所有歌曲文件存储在本地磁盘（无需手动整理，工具会自动扫描建库）
    - （可选）Tailscale 内网穿透，用于外网访问
    - （可选）Embedding API 用于语义向量搜索（如 OpenAI、Azure、ARK 等提供的 embedding 服务）
 
@@ -33,12 +31,34 @@ git clone https://github.com/your-username/music-playlist-generator.git
 
 2. 配置你的音乐项目：
 
-在 `MUSIC_PROJECT_DIR` 中确保你已经：
-- 导入了歌曲索引数据库
-- 配置好了web服务器，端口一般为 3000
-- 测试了歌单生成脚本可以正常运行
+复制 `config.json.example` 为 `config.json`，填入你的音乐目录路径：
 
-3. 在 OpenClaw 中启用该技能即可使用
+```json
+{
+  "musicLibrary": {
+    "paths": ["/path/to/your/music", "/another/music/dir"]
+  }
+}
+```
+
+3. 扫描建库：
+
+```bash
+cd ${MUSIC_PROJECT_DIR}
+node scripts/scan-library.js
+```
+
+脚本会递归扫描配置的目录，自动识别音频文件（mp3/flac/m4a/wav/aac/ogg/wma/ape），从目录结构和文件名智能解析歌名、歌手、专辑、流派等元数据，创建 SQLite 索引数据库。
+
+**支持的目录结构推断：**
+- `流派/歌手/专辑/歌曲.mp3` → 自动解析 genre, artist, album
+- `歌手/专辑/歌曲.mp3` → 自动解析 artist, album
+- `歌手/歌曲.mp3` → 自动解析 artist
+- `歌手 - 歌名.mp3` → 从文件名解析 artist, title
+
+**增量模式：** 重复运行时自动跳过已入库的文件，只导入新增文件。
+
+4. 在 OpenClaw 中启用该技能即可使用
 
 ## 验证安装
 

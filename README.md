@@ -78,22 +78,19 @@ This is an OpenClaw skill plugin that helps you manage your personal music libra
 ## 📋 前置要求 | 📋 Prerequisites | 📋 Предварительные требования
 
 ### 🇨🇳 中文
-- 你需要有一个整理好的本地音乐库（歌曲文件储存在本地磁盘）
-- 已导入歌曲元数据索引导入到 SQLite 数据库
+- 你需要有一个本地音乐库（歌曲文件储存在本地磁盘，不需要整理，工具会自动扫描建库）
 - OpenClaw 运行环境
 - 可选：Tailscale 内网穿透，实现外网访问
 - 可选：Embedding API 用于语义向量搜索（如 OpenAI、Azure、ARK 等提供的 embedding 服务）
 
 ### 🇬🇧 English
-- You need to have an organized local music library (song files stored on local disk)
-- You have imported song metadata indexes into SQLite database
+- You need to have a local music library (song files stored on local disk — no manual organization needed, the tool auto-scans and indexes)
 - OpenClaw runtime environment
 - Optional: Tailscale penetration for external network access
 - Optional: Embedding API for semantic vector search (e.g., OpenAI, Azure, ARK or other embedding services)
 
 ### 🇷🇺 Русский
-- Вам нужна организованная локальная музыкальная библиотека (файлы песен хранятся на локальном диске)
-- Вы импортировали индексы метаданных песен в базу данных SQLite
+- Вам нужна локальная музыкальная библиотека (файлы песен на локальном диске — ручная организация не требуется, инструмент автоматически сканирует и индексирует)
 - Среда выполнения OpenClaw
 - Опционально: Туннелирование Tailscale для доступа из внешней сети
 - Опционально: Embedding API для семантического векторного поиска (например, OpenAI, Azure, ARK или другие embedding-сервисы)
@@ -104,30 +101,27 @@ This is an OpenClaw skill plugin that helps you manage your personal music libra
 
 ### 🇨🇳 中文
 1. 将本skill克隆到你的 OpenClaw skills 目录
-2. 配置环境变量：
-   - `MUSIC_PROJECT_DIR`: 你的音乐项目根目录
-   - `PLAYLIST_BASE_URL`: 你的音乐服务基础URL
-   - `FEISHU_CHAT_TARGET`: 你的飞书聊天目标ID（飞书环境使用）
-3. 启动音乐服务：`npm start`
-4. 在聊天中发送「生成歌单 主题」即可使用
+2. 复制 `config.json.example` 为 `config.json`，填入你的音乐目录路径
+3. 扫描建库：`node scripts/scan-library.js`（自动扫描音乐目录，创建索引数据库）
+4. 启动音乐服务：`npm start`
+5. 在聊天中发送「生成歌单 主题」即可使用
+6. （可选）生成语义向量：`node scripts/generate-embeddings.js`（需配置 Embedding API）
 
 ### 🇬🇧 English
 1. Clone this skill to your OpenClaw skills directory
-2. Configure environment variables:
-   - `MUSIC_PROJECT_DIR`: Your music project root directory
-   - `PLAYLIST_BASE_URL`: Your music service base URL
-   - `FEISHU_CHAT_TARGET`: Your Feishu chat target ID (for Feishu environment)
-3. Start music service: `npm start`
-4. Send "Generate playlist [theme]" in chat to use
+2. Copy `config.json.example` to `config.json`, fill in your music directory paths
+3. Scan and index: `node scripts/scan-library.js` (auto-scans music directories, creates index database)
+4. Start music service: `npm start`
+5. Send "Generate playlist [theme]" in chat to use
+6. (Optional) Generate embeddings: `node scripts/generate-embeddings.js` (requires Embedding API config)
 
 ### 🇷🇺 Русский
 1. Клонируйте этот навык в каталог навыков OpenClaw
-2. Настройте переменные окружения:
-   - `MUSIC_PROJECT_DIR`: Корневой каталог вашего музыкального проекта
-   - `PLAYLIST_BASE_URL`: Базовый URL вашего музыкального сервиса
-   - `FEISHU_CHAT_TARGET`: ID целевого чата Feishu (для среды Feishu)
-3. Запустите музыкальный сервис: `npm start`
-4. Отправьте «Сгенерировать плейлист [тема]» в чате для использования
+2. Скопируйте `config.json.example` в `config.json`, укажите пути к музыкальным каталогам
+3. Сканирование и индексация: `node scripts/scan-library.js` (автоматически сканирует каталоги и создает базу данных)
+4. Запустите музыкальный сервис: `npm start`
+5. Отправьте «Сгенерировать плейлист [тема]» в чате для использования
+6. (Опционально) Генерация векторов: `node scripts/generate-embeddings.js` (требуется настройка Embedding API)
 
 ---
 

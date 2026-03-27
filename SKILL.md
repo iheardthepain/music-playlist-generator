@@ -22,6 +22,13 @@ Do not hardcode:
 
 Use placeholders and environment variables instead.
 
+## Library Setup
+
+Before generating playlists, the music library must be indexed:
+- node scripts/scan-library.js
+
+This scans directories listed in `config.json` → `musicLibrary.paths`, identifies audio files, parses metadata from directory structure and filenames, and creates the SQLite index database. Supports incremental mode (skips existing files on re-run).
+
 ## Entrypoint Contract
 
 Single production entrypoint:
