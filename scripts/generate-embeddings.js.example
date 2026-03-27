@@ -220,40 +220,50 @@ function dbGet(db, sql, params = []) {
   });
 }
 
-/** 批量 upsert embedding */
+/** 批量 upsert embedding（正确的异步回调链） */
 async function upsertEmbeddings(db, items) {
   // items: [{track_id, embedding: Float32Array, text_hash}]
-  const stmt = db.prepare(`
-    INSERT INTO tracks_embeddings (track_id, model, dim, embedding, text_hash, updated_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(track_id) DO UPDATE SET
-      model      = excluded.model,
-      dim        = excluded.dim,
-      embedding  = excluded.embedding,
-      text_hash  = excluded.text_hash,
-      updated_at = excluded.updated_at
-  `);
-
   return new Promise((resolve, reject) => {
-    db.serialize(() => {
-      db.run('BEGIN');
-      let err = null;
+    db.run('BEGIN', (beginErr) => {
+      if (beginErr) return reject(beginErr);
+      
+      let pending = items.length;
+      let failed = false;
+      
+      const stmt = db.prepare(`
+        INSERT INTO tracks_embeddings (track_id, model, dim, embedding, text_hash, updated_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(track_id) DO UPDATE SET
+          model      = excluded.model,
+          dim        = excluded.dim,
+          embedding  = excluded.embedding,
+          text_hash  = excluded.text_hash,
+          updated_at = excluded.updated_at
+      `);
+      
       for (const item of items) {
         const buf = float32ToBuffer(new Float32Array(item.embedding));
         stmt.run(
           [item.track_id, EMBEDDING_MODEL, EMBEDDING_DIM, buf, item.text_hash],
-          (e) => { if (e) err = e; }
+          (e) => {
+            if (e && !failed) {
+              failed = true;
+              stmt.finalize();
+              db.run('ROLLBACK', () => reject(e));
+              return;
+            }
+            pending--;
+            if (pending === 0 && !failed) {
+              stmt.finalize(() => {
+                db.run('COMMIT', (commitErr) => {
+                  if (commitErr) return reject(commitErr);
+                  resolve();
+                });
+              });
+            }
+          }
         );
       }
-      stmt.finalize();
-      if (err) {
-        db.run('ROLLBACK');
-        return reject(err);
-      }
-      db.run('COMMIT', (e2) => {
-        if (e2) return reject(e2);
-        resolve();
-      });
     });
   });
 }
@@ -275,6 +285,9 @@ async function main() {
   await initEmbeddingsTable();
 
   const db = new sqlite3.Database(DB_PATH);
+  // 设置 busy_timeout 防止与其他进程的锁冲突（等待最多 30 秒）
+  await dbRun(db, 'PRAGMA busy_timeout = 30000');
+  await dbRun(db, 'PRAGMA journal_mode = WAL');
 
   try {
     // 取所有 tracks（含歌词预览）
@@ -330,7 +343,15 @@ async function main() {
     let totalFailed = 0;
     const startTime = Date.now();
 
-    // 并发控制
+    // 写入队列：API 并发获取 embedding，但数据库写入严格串行
+    // node-sqlite3 单连接不支持并发事务（cannot start a transaction within a transaction）
+    let writePromise = Promise.resolve();
+    function enqueueWrite(fn) {
+      writePromise = writePromise.then(fn).catch(fn);
+      return writePromise;
+    }
+
+    // 并发控制：API 调用并发，DB 写入串行
     let batchIdx = 0;
     async function worker() {
       while (batchIdx < batches.length) {
@@ -347,11 +368,12 @@ async function main() {
             text_hash: track._textHash
           }));
 
-          await upsertEmbeddings(db, items);
-          totalDone += batch.length;
-
-          // 更新进度
-          await dbRun(db, `UPDATE embedding_jobs SET done=? WHERE id=?`, [totalDone + alreadyDone, jobId]);
+          // 串行写入数据库（排队等待前一个写入完成）
+          await enqueueWrite(async () => {
+            await upsertEmbeddings(db, items);
+            totalDone += batch.length;
+            await dbRun(db, `UPDATE embedding_jobs SET done=? WHERE id=?`, [totalDone + alreadyDone, jobId]);
+          });
 
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           const pct = ((totalDone / pending.length) * 100).toFixed(1);
@@ -364,7 +386,9 @@ async function main() {
         } catch (err) {
           totalFailed += batch.length;
           console.error(`\n  [批次${myIdx}] 失败: ${err.message}`);
-          await dbRun(db, `UPDATE embedding_jobs SET failed=? WHERE id=?`, [totalFailed, jobId]);
+          await enqueueWrite(async () => {
+            await dbRun(db, `UPDATE embedding_jobs SET failed=? WHERE id=?`, [totalFailed, jobId]);
+          });
         }
       }
     }
@@ -372,6 +396,8 @@ async function main() {
     // 启动并发 workers
     const workers = Array.from({ length: CONCURRENCY }, () => worker());
     await Promise.all(workers);
+    // 等待所有排队的写入完成
+    await writePromise;
 
     console.log('\n');
 

@@ -153,6 +153,25 @@ This is an OpenClaw skill plugin that helps you manage your personal music libra
 
 ---
 
+## 🔄 最近更新 | 🔄 Recent Updates | 🔄 Последние обновления
+
+### 🇨🇳 中文
+- 🛡️ **SQLite 并发写入保护**：添加 `PRAGMA busy_timeout = 30000` 和 WAL 日志模式，解决多进程同时访问数据库时的 `SQLITE_BUSY` 错误和排他锁冲突
+- 🔧 **向量生成异步错误处理修复**：修复 `upsertEmbeddings` 中 `stmt.run` 回调的异步错误被静默吞掉的问题，重写为正确的异步回调链
+- 📦 **多 Worker 数据库写入串行化**：API 并发获取 embedding 时，数据库写入通过 Promise 队列严格串行化，避免 `cannot start a transaction within a transaction` 错误
+
+### 🇬🇧 English
+- 🛡️ **SQLite Concurrent Write Protection**: Added `PRAGMA busy_timeout = 30000` and WAL journal mode to fix `SQLITE_BUSY` errors and exclusive lock conflicts when multiple processes access the database simultaneously
+- 🔧 **Embedding Generation Async Error Handling Fix**: Fixed a bug where `stmt.run` callback errors in `upsertEmbeddings` were silently swallowed due to synchronous error checking on asynchronous callbacks; rewritten with proper async callback chain
+- 📦 **Multi-Worker DB Write Serialization**: When fetching embeddings concurrently via API, database writes are now strictly serialized through a Promise queue to prevent `cannot start a transaction within a transaction` errors
+
+### 🇷🇺 Русский
+- 🛡️ **Защита параллельной записи SQLite**: Добавлены `PRAGMA busy_timeout = 30000` и режим журнала WAL для исправления ошибок `SQLITE_BUSY` и конфликтов эксклюзивной блокировки при одновременном доступе к базе данных несколькими процессами
+- 🔧 **Исправление асинхронной обработки ошибок генерации векторов**: Исправлена ошибка, при которой ошибки обратного вызова `stmt.run` в `upsertEmbeddings` молча проглатывались из-за синхронной проверки ошибок на асинхронных обратных вызовах; переписано с правильной цепочкой асинхронных обратных вызовов
+- 📦 **Сериализация записи БД при множественных воркерах**: При параллельном получении embedding через API записи в базу данных теперь строго сериализуются через очередь Promise, чтобы предотвратить ошибки `cannot start a transaction within a transaction`
+
+---
+
 ## ⚖️ 合规说明 | ⚖️ Compliance Statement | ⚖️ Заявление о соответствии
 
 ### 🇨🇳 中文

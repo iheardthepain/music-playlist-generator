@@ -26,6 +26,9 @@ function initEmbeddingsTable() {
     });
 
     db.serialize(() => {
+      // 设置 busy_timeout 防止与其他进程的锁冲突
+      db.run('PRAGMA busy_timeout = 30000');
+      db.run('PRAGMA journal_mode = WAL');
       // 向量存储表：每首歌一行，embedding 以 Float32Array→Buffer 存 BLOB
       db.run(`
         CREATE TABLE IF NOT EXISTS tracks_embeddings (

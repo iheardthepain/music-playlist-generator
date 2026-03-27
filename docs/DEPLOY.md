@@ -137,6 +137,16 @@ node scripts/generate-embeddings.js
 node scripts/generate-playlist.js "雨天发呆" 10 --vector
 ```
 
+### 并发写入保护
+
+系统已内置 SQLite 并发写入保护机制：
+
+- **busy_timeout**：设置为 30 秒等待，当数据库被其他进程锁定时会自动重试而非立即报错
+- **WAL 模式**：使用 Write-Ahead Logging 日志模式，允许读写并发，大幅减少锁冲突
+- **写入串行化**：`generate-embeddings.js` 中 API 调用并发执行，但数据库写入通过 Promise 队列严格串行化，避免嵌套事务错误
+
+虽然有以上保护，但仍建议**不要同时运行多个写入脚本**（如同时运行 `scan-library.js` 和 `generate-embeddings.js`），以获得最佳性能和稳定性。
+
 ### 智能降级
 
 当向量搜索不可用时（未配置 embedding、向量库为空、API 调用失败等），系统会自动降级到关键词匹配，不影响正常使用。
